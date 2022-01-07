@@ -11,7 +11,7 @@
             "program": "${file}",
             "console": "integratedTerminal",
             "justMyCode": false,
-            "args": ["install", "~/Downloads/IHNs5_modpack1.6.zip"]
+            "args": ["uninstall", "~/Downloads/IHNs5_modpack1.6.zip"]
         }
     ]
 }
