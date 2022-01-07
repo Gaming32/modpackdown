@@ -66,7 +66,7 @@ def _get_mod_versions(mods_dir: FsOrZipPath, cache: CachedModVersions) -> Loaded
 
 def install_pack(
     mods_dir: Path,
-    installed_packs: InstalledModsCounter,
+    packed_mods: InstalledModsCounter,
     current_mods: LoadedModList,
     pack_path: Path,
     version_id_cache: CachedModVersions
@@ -79,17 +79,17 @@ def install_pack(
         print('Identified', len(pack_mods), 'mods to maybe install')
         for (mod_id, (mod_version, mod_origin)) in pack_mods.items():
             if mod_id in current_mods:
-                if mod_id in installed_packs:
+                if mod_id in packed_mods:
                     # Record this mod as installed again
-                    installed_packs[mod_id] += 1
+                    packed_mods[mod_id] += 1
                     print(f'Skipped installation of mod {mod_id} as it was already installed from another pack')
                 else:
                     # Otherwise it's from the user
-                    installed_packs[mod_id] = 2
+                    packed_mods[mod_id] = 2
                     print(f'Skipped installation of mod {mod_id} as it was already user installed')
                 skipped_count += 1
             else:
-                installed_packs[mod_id] = 1
+                packed_mods[mod_id] = 1
                 with (
                         mod_origin.open('rb') as fp_from,
                         (mods_dir / mod_origin.name).open('wb') as fp_to
@@ -102,12 +102,53 @@ def install_pack(
         print(skipped_count, 'mods were skipped because they were already installed')
 
 
+def uninstall_pack(
+    mods_dir: Path,
+    packed_mods: InstalledModsCounter,
+    current_mods: LoadedModList,
+    pack_path: Path,
+    version_id_cache: CachedModVersions
+) -> None:
+    uninstalled_count = 0
+    skipped_count = 0
+    failed_count = 0
+    with ZipFile(pack_path) as pack_zip:
+        zip_root = zipfile.Path(pack_zip)
+        pack_mods = _get_mod_versions(zip_root, version_id_cache)
+        print('Identified', len(pack_mods), 'mods to maybe uninstall')
+        for (mod_id, (mod_version, mod_origin)) in pack_mods.items():
+            if mod_id in packed_mods:
+                packed_mods[mod_id] -= 1
+                if packed_mods[mod_id]:
+                    print(f'Skipped uninstallation of mod {mod_id} as it was installed from somewhere else as well')
+                    skipped_count += 1
+                else:
+                    removal_path = mods_dir / mod_origin.name
+                    try:
+                        removal_path.unlink()
+                    except FileNotFoundError:
+                        print(f'Failed to uninstall {mod_id} because it was missing')
+                        failed_count += 1
+                    else:
+                        current_mods.pop(mod_id)
+                        print(f'Successfully uninstalled mod {mod_id}:{mod_version}')
+                        uninstalled_count += 1
+            else:
+                print(f'Failed to uninstall mod {mod_id} because it was not installed')
+                failed_count += 1
+    print('Unnstalled', uninstalled_count, 'mods from this pack')
+    if skipped_count:
+        print(skipped_count, 'mods were skipped because they were installed from somewhere else')
+    if failed_count:
+        print(failed_count, 'mods failed to uninstall because they were missing or the installation state was inconsistent')
+
+
 def main() -> None:
     mods_dir = Path('~/AppData/Roaming/.minecraft/mods').expanduser()
     cache_file = mods_dir / 'modpackdown_cache.json'
     installed_packs_file = mods_dir / 'modpackdown_data.json'
     version_id_cache: CachedModVersions
-    installed_packs: InstalledModsCounter
+    packed_mods: InstalledModsCounter
     try:
         with open(cache_file) as fp:
             version_id_cache = json.load(fp)
@@ -115,16 +156,24 @@ def main() -> None:
         version_id_cache = {}
     try:
         with open(installed_packs_file) as fp:
-            installed_packs = json.load(fp)
+            packed_mods = json.load(fp)
     except (FileNotFoundError, UnicodeDecodeError, JSONDecodeError):
-        installed_packs = {}
+        packed_mods = {}
 
     current_mods = _get_mod_versions(mods_dir, version_id_cache)
     print('Identified', len(current_mods), 'currently installed mods')
     if sys.argv[1] == 'install':
         install_pack(
             mods_dir,
-            installed_packs,
+            packed_mods,
+            current_mods,
+            Path(sys.argv[2]).expanduser(),
+            version_id_cache
+        )
+    elif sys.argv[1] == 'uninstall':
+        uninstall_pack(
+            mods_dir,
+            packed_mods,
             current_mods,
             Path(sys.argv[2]).expanduser(),
             version_id_cache
@@ -133,7 +182,7 @@ def main() -> None:
     with open(cache_file, 'w') as fp:
         json.dump(version_id_cache, fp)
     with open(installed_packs_file, 'w') as fp:
-        json.dump(installed_packs, fp)
+        json.dump(packed_mods, fp)
 
 
 if __name__ == '__main__':
