@@ -119,7 +119,7 @@ def uninstall_pack(
         for (mod_id, (mod_version, mod_origin)) in pack_mods.items():
             if mod_id in packed_mods:
                 packed_mods[mod_id] -= 1
-                if packed_mods[mod_id]:
+                if packed_mods[mod_id] > 0:
                     print(f'Skipped uninstallation of mod {mod_id} as it was installed from somewhere else as well')
                     skipped_count += 1
                 else:
@@ -127,12 +127,13 @@ def uninstall_pack(
                     try:
                         removal_path.unlink()
                     except FileNotFoundError:
-                        print(f'Failed to uninstall {mod_id} because it was missing')
+                        print(f'Failed to uninstall {mod_id}:{mod_version} because it was missing')
                         failed_count += 1
                     else:
-                        current_mods.pop(mod_id)
                         print(f'Successfully uninstalled mod {mod_id}:{mod_version}')
                         uninstalled_count += 1
+                    current_mods.pop(mod_id, None)
+                    packed_mods.pop(mod_id, None)
             else:
                 print(f'Failed to uninstall mod {mod_id} because it was not installed')
                 failed_count += 1
