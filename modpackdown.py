@@ -1,17 +1,19 @@
 import io
 import json
+import logging
 import shutil
 import sys
 import zipfile
 from json.decoder import JSONDecodeError
 from pathlib import Path
-from typing import Optional, TypeVar, TypedDict, Union
+from typing import Any, Optional, TypedDict, TypeVar, Union
 from zipfile import BadZipFile, ZipFile
 
 _T_ModPackDown = TypeVar('_T_ModPackDown', bound='ModPackDown')
 
-InstalledModsCounter = dict[str, int]
 FsOrZipPath = Union[Path, zipfile.Path]
+EventMod = tuple[str, str, FsOrZipPath]
+InstalledModsCounter = dict[str, int]
 LoadedModList = dict[str, tuple[str, FsOrZipPath]]
 CachedModVersions = dict[str, tuple[str, str]]
 
@@ -22,6 +24,10 @@ elif sys.platform == 'darwin':
 else:
     _default_mods_folder = '~/.minecraft'
 DEFAULT_MODS_DIR = Path(_default_mods_dir).expanduser()
+
+
+class EventNames:
+    pass
 
 
 class BasicFabricModJson(TypedDict):
@@ -138,18 +144,19 @@ class ModPackDown:
         with ZipFile(pack_path) as pack_zip:
             zip_root = zipfile.Path(pack_zip)
             pack_mods = get_mod_versions(zip_root, self.version_id_cache)
-            print('Identified', len(pack_mods), 'mods to maybe install')
+            self.identified_mods_to_install(pack_mods, False)
             for (mod_id, (mod_version, mod_origin)) in pack_mods.items():
+                event_mod_data = (mod_id, mod_version, mod_origin)
                 if mod_id in self.current_mods:
+                    skipped_count += 1
                     if mod_id in self.packed_mods:
                         # Record this mod as installed again
                         self.packed_mods[mod_id] += 1
-                        print(f'Skipped installation of mod {mod_id} as it was already installed from another pack')
+                        self.skipped_installation(event_mod_data, skipped_count, True)
                     else:
                         # Otherwise it's from the user
                         self.packed_mods[mod_id] = 2
-                        print(f'Skipped installation of mod {mod_id} as it was already user installed')
-                    skipped_count += 1
+                        self.skipped_installation(event_mod_data, skipped_count, False)
                 else:
                     self.packed_mods[mod_id] = 1
                     try:
@@ -159,16 +166,12 @@ class ModPackDown:
                             ):
                             shutil.copyfileobj(fp_from, fp_to)
                     except Exception as e:
-                        print(f'Failed to install mod {mod_id}:{mod_version} because', e)
                         failed_count += 1 # Disk space or permissions error I guess?
+                        self.failed_installation(event_mod_data, failed_count, e)
                     else:
-                        print(f'Successfully installed mod {mod_id}:{mod_version}')
                         installed_count += 1
-        print('Installed', installed_count, 'mods from this pack')
-        if skipped_count:
-            print(skipped_count, 'mods were skipped because they were already installed')
-        if failed_count:
-            print(failed_count, 'mods failed to install for some reason')
+                        self.succeeded_installation(event_mod_data, installed_count)
+        self.pack_installed(installed_count, skipped_count, failed_count)
 
     def uninstall_pack(self, pack_path: Path) -> None:
         uninstalled_count = 0
@@ -177,30 +180,72 @@ class ModPackDown:
         with ZipFile(pack_path) as pack_zip:
             zip_root = zipfile.Path(pack_zip)
             pack_mods = get_mod_versions(zip_root, self.version_id_cache)
-            print('Identified', len(pack_mods), 'mods to maybe uninstall')
+            self.identified_mods_to_install(pack_mods, True)
             for (mod_id, (mod_version, mod_origin)) in pack_mods.items():
+                event_mod_data = (mod_id, mod_version, mod_origin)
                 if mod_id in self.packed_mods:
                     self.packed_mods[mod_id] -= 1
                     if self.packed_mods[mod_id] > 0:
-                        print(f'Skipped uninstallation of mod {mod_id} as it was installed from somewhere else as well')
                         skipped_count += 1
+                        self.skipped_uninstallation(event_mod_data, skipped_count)
                     else:
                         removal_path = self.mods_dir / mod_origin.name
                         try:
                             removal_path.unlink()
                         except FileNotFoundError:
-                            print(f'Failed to uninstall {mod_id}:{mod_version} because it was missing')
                             failed_count += 1
+                            self.failed_uninstallation(event_mod_data, failed_count, 'it was missing')
                         else:
-                            print(f'Successfully uninstalled mod {mod_id}:{mod_version}')
                             uninstalled_count += 1
+                            self.succeeded_uninstallation(event_mod_data, uninstalled_count)
                         self.current_mods.pop(mod_id, None)
                         self.packed_mods.pop(mod_id, None)
                 else:
-                    print(f'Failed to uninstall mod {mod_id} because it was not installed')
                     failed_count += 1
-        print('Uninstalled', uninstalled_count, 'mods from this pack')
-        if skipped_count:
-            print(skipped_count, 'mods were skipped because they were installed from somewhere else')
-        if failed_count:
-            print(failed_count, 'mods failed to uninstall because they were missing or the installation state was inconsistent')
+                    self.failed_uninstallation(event_mod_data, failed_count, 'it was not installed')
+        self.pack_uninstalled(uninstalled_count, skipped_count, failed_count)
+
+    ####################
+    ## Event handlers ##
+    ####################
+
+    # Use Any so subclasses can return whatever
+    def identified_mods_to_install(self, mods: LoadedModList, is_uninstall: bool) -> Any:
+        logging.info('Identified %i mods to maybe %sinstall', len(mods), 'un' * is_uninstall)
+
+    def skipped_installation(self, mod: EventMod, counter: int, was_from_another_pack: bool) -> Any:
+        message = 'Skipped installation of mod %s as it was already '
+        if was_from_another_pack:
+            message += 'installed from another pack'
+        else:
+            message += 'user installed'
+        logging.info(message, mod[0])
+
+    def failed_installation(self, mod: EventMod, counter: int, reason: Optional[BaseException] = None) -> Any:
+        logging.error('Failed to install mod %s:%s because %s', mod[0], mod[1], reason)
+
+    def succeeded_installation(self, mod: EventMod, counter: int) -> Any:
+        logging.info('Successfully installed mod %s:%s', mod[0], mod[1])
+
+    def pack_installed(self, succeeded: int, skipped: int, failed: int) -> Any:
+        logging.info('Installed %i mods from this pack', succeeded)
+        if skipped:
+            logging.info('%i mods were skipped because they were already installed', skipped)
+        if failed:
+            logging.warning('%i mods failed to install for some reason', failed)
+
+    def skipped_uninstallation(self, mod: EventMod, counter: int) -> Any:
+        logging.info('Skipped uninstallation of mod %s as it was installed from somewhere else as well', mod[0])
+
+    def failed_uninstallation(self, mod: EventMod, counter: int, reason: Union[None, str, BaseException] = None) -> Any:
+        logging.error('Failed to uninstall %s:%s because %s', mod[0], mod[1], reason)
+
+    def succeeded_uninstallation(self, mod: EventMod, counter: int) -> Any:
+        logging.info('Successfully uninstalled %s:%s', mod[0], mod[1])
+
+    def pack_uninstalled(self, succeeded: int, skipped: int, failed: int) -> Any:
+        logging.info('Uninstalled %i mods from this pack', succeeded)
+        if skipped:
+            logging.info('%i mods were skipped because they were installed from somewhere else', skipped)
+        if failed:
+            logging.warning('%i mods failed to uninstall because they were missing or the installation state was inconsistent', failed)

@@ -1,3 +1,4 @@
+import logging
 import sys
 from pathlib import Path
 
@@ -5,6 +6,12 @@ from modpackdown import DEFAULT_MODS_DIR, ModPackDown
 
 
 def main() -> None:
+    logging.basicConfig(
+        format='[%(asctime)s/%(levelname)s] [%(filename)s:%(lineno)i]: %(message)s',
+        datefmt='%H:%M:%S',
+        level=logging.INFO
+    )
+
     mods_dir = Path.cwd()
     if mods_dir.name != 'mods':
         mods_dir = DEFAULT_MODS_DIR
