@@ -134,6 +134,7 @@ class ModPackDown:
     def install_pack(self, pack_path: Path) -> None:
         installed_count = 0
         skipped_count = 0
+        failed_count = 0
         with ZipFile(pack_path) as pack_zip:
             zip_root = zipfile.Path(pack_zip)
             pack_mods = get_mod_versions(zip_root, self.version_id_cache)
@@ -151,16 +152,23 @@ class ModPackDown:
                     skipped_count += 1
                 else:
                     self.packed_mods[mod_id] = 1
-                    with (
-                            mod_origin.open('rb') as fp_from,
-                            (self.mods_dir / mod_origin.name).open('wb') as fp_to
-                        ):
-                        shutil.copyfileobj(fp_from, fp_to)
-                    print(f'Successfully installed mod {mod_id}:{mod_version}')
-                    installed_count += 1
+                    try:
+                        with (
+                                mod_origin.open('rb') as fp_from,
+                                (self.mods_dir / mod_origin.name).open('wb') as fp_to
+                            ):
+                            shutil.copyfileobj(fp_from, fp_to)
+                    except Exception as e:
+                        print(f'Failed to install mod {mod_id}:{mod_version} because', e)
+                        failed_count += 1 # Disk space or permissions error I guess?
+                    else:
+                        print(f'Successfully installed mod {mod_id}:{mod_version}')
+                        installed_count += 1
         print('Installed', installed_count, 'mods from this pack')
         if skipped_count:
             print(skipped_count, 'mods were skipped because they were already installed')
+        if failed_count:
+            print(failed_count, 'mods failed to install for some reason')
 
     def uninstall_pack(self, pack_path: Path) -> None:
         uninstalled_count = 0
