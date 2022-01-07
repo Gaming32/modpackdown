@@ -8,8 +8,7 @@ from pathlib import Path
 from typing import Optional, TypedDict, Union
 from zipfile import BadZipFile, ZipFile
 
-InstalledPackData = dict[str, str]
-InstalledPacksList = list[InstalledPackData]
+InstalledModsCounter = dict[str, int]
 FsOrZipPath = Union[Path, zipfile.Path]
 LoadedModList = dict[str, tuple[str, FsOrZipPath]]
 CachedModVersions = dict[str, tuple[str, str]]
@@ -67,31 +66,30 @@ def _get_mod_versions(mods_dir: FsOrZipPath, cache: CachedModVersions) -> Loaded
 
 def install_pack(
     mods_dir: Path,
-    installed_packs: InstalledPacksList,
+    installed_packs: InstalledModsCounter,
     current_mods: LoadedModList,
     pack_path: Path,
     version_id_cache: CachedModVersions
 ) -> None:
     installed_count = 0
     skipped_count = 0
-    original_mods = installed_packs[0]
     with ZipFile(pack_path) as pack_zip:
         zip_root = zipfile.Path(pack_zip)
         pack_mods = _get_mod_versions(zip_root, version_id_cache)
         print('Identified', len(pack_mods), 'mods to maybe install')
-        new_pack_data: InstalledPackData = {}
         for (mod_id, (mod_version, mod_origin)) in pack_mods.items():
             if mod_id in current_mods:
-                if mod_id not in original_mods:
-                    # Record this mod in the list of original mods
-                    original_mods[mod_id] = mod_version
-                    print(f'Skipped installation of mod {mod_id} as it was already user installed')
-                else:
-                    # Otherwise this mod is from another pack
+                if mod_id in installed_packs:
+                    # Record this mod as installed again
+                    installed_packs[mod_id] += 1
                     print(f'Skipped installation of mod {mod_id} as it was already installed from another pack')
+                else:
+                    # Otherwise it's from the user
+                    installed_packs[mod_id] = 2
+                    print(f'Skipped installation of mod {mod_id} as it was already user installed')
                 skipped_count += 1
             else:
-                new_pack_data[mod_id] = mod_version
+                installed_packs[mod_id] = 1
                 with (
                         mod_origin.open('rb') as fp_from,
                         (mods_dir / mod_origin.name).open('wb') as fp_to
@@ -102,15 +100,14 @@ def install_pack(
     print('Installed', installed_count, 'mods from this pack')
     if skipped_count:
         print(skipped_count, 'mods were skipped because they were already installed')
-    installed_packs.append(new_pack_data)
 
 
 def main() -> None:
     mods_dir = Path('~/AppData/Roaming/.minecraft/mods').expanduser()
     cache_file = mods_dir / 'modpackdown_cache.json'
-    installed_packs_file = mods_dir / 'modpackdown_cache.json'
+    installed_packs_file = mods_dir / 'modpackdown_data.json'
     version_id_cache: CachedModVersions
-    installed_packs: InstalledPacksList
+    installed_packs: InstalledModsCounter
     try:
         with open(cache_file) as fp:
             version_id_cache = json.load(fp)
@@ -120,7 +117,7 @@ def main() -> None:
         with open(installed_packs_file) as fp:
             installed_packs = json.load(fp)
     except (FileNotFoundError, UnicodeDecodeError, JSONDecodeError):
-        installed_packs = [{}]
+        installed_packs = {}
 
     current_mods = _get_mod_versions(mods_dir, version_id_cache)
     print('Identified', len(current_mods), 'currently installed mods')
